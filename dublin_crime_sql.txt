@@ -1,0 +1,88 @@
+-- Create table schema
+
+CREATE TABLE dublin_crime (
+    event_id_cnty VARCHAR(10),
+    event_date DATE,
+    year INT,
+    time_precision INT,
+    disorder_type VARCHAR(150),
+    event_type VARCHAR(150),
+    sub_event_type VARCHAR(150),
+    location VARCHAR(150),
+    latitude DECIMAL(8, 4),
+    longitude DECIMAL(8, 4),
+    geo_precision INT,
+    tags TEXT,
+    timestamp BIGINT
+);
+
+
+-- Convert geoJSON (buildings and regions) into tables using ogr2ogr 
+
+-- Creating index
+
+CREATE INDEX idx_crimes_geom ON dublin_crime USING GIST(geom);
+CREATE INDEX idx_buildings_geom ON buildings_dublin USING GIST(wkb_geometry);
+CREATE INDEX idx_all_regions_geom ON all_regions_dublin USING GIST(wkb_geometry);
+
+--
+
+SELECT ST_SRID(wkb_geometry) FROM all_regions_dublin; -- 4326
+SELECT ST_SRID(wkb_geometry) FROM buildings_dublin; -- 4326
+SELECT ST_SRID(geom) FROM dublin_crime; -- 4326
+
+
+--
+
+CREATE VIEW crime_heatmap AS
+SELECT  
+    ROW_NUMBER() OVER () AS id,
+    c.geom,
+    COUNT(*) AS crime_count
+FROM 
+    dublin_crime c
+GROUP BY 
+    c.geom;
+
+--
+
+CREATE VIEW crime_buffers AS
+SELECT 
+    ROW_NUMBER() OVER () AS id,
+    c.geom AS crime_location,
+    ST_Buffer(c.geom::geography, 500)::geometry AS buffer_geom
+FROM 
+    dublin_crime c;
+
+--
+
+CREATE VIEW buildings_near_crimes AS
+SELECT 
+    ROW_NUMBER() OVER () AS id,
+    b.wkb_geometry AS building_geom,
+    c.crime_location,
+    c.buffer_geom
+FROM 
+    buildings_dublin b
+JOIN 
+    crime_buffers c
+ON 
+    ST_Intersects(b.wkb_geometry, c.buffer_geom);
+
+--
+
+CREATE VIEW crime_by_region AS
+SELECT 
+    ROW_NUMBER() OVER () AS id,
+    r.wkb_geometry AS geom,
+    r.region_names AS region_name,
+    COUNT(c.*) AS crime_count
+FROM 
+    all_regions_dublin r
+LEFT JOIN 
+    dublin_crime c
+ON 
+    ST_Within(c.geom, r.wkb_geometry)
+GROUP BY 
+    r.wkb_geometry, r.region_names;
+
